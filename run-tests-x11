@@ -1,0 +1,34 @@
+#!/usr/bin/bash
+set -x
+
+export MACH_USE_SYSTEM_PYTHON=1
+export MOZ_NODE_PATH=/usr/bin/node
+export X_PARAMS="-screen 0 1600x1200x24"
+export MOCHITEST_PARAMS="--timeout 1 --chunk-by-dir 4"
+export TEST_DIR="test_results"
+
+# Fix for system nss
+ln -s /usr/bin/certutil objdir/dist/bin/certutil
+ln -s /usr/bin/pk12util objdir/dist/bin/pk12util
+
+NCPUS="`/usr/bin/getconf _NPROCESSORS_ONLN`"
+
+./mach xpcshell-test --sequential 2>&1 | cat - | tee $TEST_DIR/xpcshell
+./mach xpcshell-test --sequential --enable-webrender 2>&1 | cat - | tee $TEST_DIR/xpcshell-wr
+
+# Basic render testing
+export TEST_PARAMS=""
+export TEST_FLAVOUR=""
+xvfb-run -s "$X_PARAMS" -n 99 ./mach reftest $TEST_PARAMS 2>&1 | tee $TEST_DIR/reftest$TEST_FLAVOUR
+xvfb-run -s "$X_PARAMS" -n 97 ./mach crashtest $TEST_PARAMS 2>&1 | tee $TEST_DIR/crashtest$TEST_FLAVOUR
+xvfb-run -s "$X_PARAMS" -n 98 ./mach mochitest $MOCHITEST_PARAMS $TEST_PARAMS 2>&1 | tee $TEST_DIR/mochitest$TEST_FLAVOUR
+
+# WebRender testing
+export TEST_PARAMS="--enable-webrender $TEST_PARAMS"
+export TEST_FLAVOUR="-wr"
+xvfb-run -s "$X_PARAMS" -n 96 ./mach reftest $TEST_PARAMS 2>&1 | tee $TEST_DIR/reftest$TEST_FLAVOUR
+xvfb-run -s "$X_PARAMS" -n 94 ./mach crashtest $TEST_PARAMS 2>&1 | tee $TEST_DIR/crashtest$TEST_FLAVOUR
+xvfb-run -s "$X_PARAMS" -n 95 ./mach mochitest $MOCHITEST_PARAMS $TEST_PARAMS 2>&1 | tee $TEST_DIR/mochitest$TEST_FLAVOUR
+
+rm -f  objdir/dist/bin/certutil
+rm -f  objdir/dist/bin/pk12util
