@@ -1,0 +1,104 @@
+#!/usr/bin/bash
+# usage: run-tests-wayland offscreen [test flavour]
+if ! [ $1 ] ; then
+  echo "Missing test params!"
+  echo ""
+  echo "usage: run-tests-wayland offscreen [test_flavour]"
+  echo ""
+  echo "       offscreen         can be 0 or 1"
+  echo "       test_flavour      can be xpc ref moch crash"
+  exit
+fi
+
+set -x
+OFFSCREEN_TESTING=$1
+
+RUN_XPCSHELL_TEST=0
+RUN_REFTEST=0
+RUN_MOCHITEST=0
+RUN_CRASHTEST=0
+
+SELECTED_TEST=$2
+if [ $SELECTED_TEST = "xpc" ] ; then
+  RUN_XPCSHELL_TEST=1
+elif [ $SELECTED_TEST = "ref" ] ; then
+  RUN_REFTEST=1
+elif [ $SELECTED_TEST = "moch" ] ; then
+  RUN_MOCHITEST=1
+elif [ $SELECTED_TEST = "crash" ] ; then
+  RUN_CRASHTEST=1
+else
+  RUN_XPCSHELL_TEST=1
+  RUN_REFTEST=1
+  RUN_MOCHITEST=1
+  RUN_CRASHTEST=1
+fi
+
+MACH_USE_SYSTEM_PYTHON=1
+MOZ_NODE_PATH=/usr/bin/node
+MOCHITEST_PARAMS="--timeout 1 --chunk-by-dir 4"
+TEST_DIR="test_results"
+mkdir $TEST_DIR
+
+# Fix for system nss
+ln -s /usr/bin/certutil objdir/dist/bin/certutil
+ln -s /usr/bin/pk12util objdir/dist/bin/pk12util
+
+NCPUS="`/usr/bin/getconf _NPROCESSORS_ONLN`"
+
+export MOZ_ENABLE_WAYLAND=1
+
+if [ $OFFSCREEN_TESTING -ne 0 ] ; then
+  xvfb-run -s "-screen 0 1600x1200x24" -n 80 mutter --wayland --nested &
+  if [ -z "$WAYLAND_DISPLAY" ] ; then
+    export WAYLAND_DISPLAY=wayland-0
+  else
+    export WAYLAND_DISPLAY=wayland-1
+  fi
+  sleep 10
+  retry_count=0
+  max_retries=5
+  until [ $retry_count -gt $max_retries ]; do
+    if [ -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]; then
+      retry_count=$(($max_retries + 1))
+    else
+      retry_count=$(($retry_count + 1))
+      echo "Waiting for Mutter, retry: $retry_count"
+      sleep 2
+    fi
+  done
+fi
+
+if [ $RUN_XPCSHELL_TEST -ne 0 ] ; then
+  ./mach xpcshell-test --sequential 2>&1 | cat - | tee $TEST_DIR/xpcshell
+  ./mach xpcshell-test --sequential --enable-webrender 2>&1 | cat - | tee $TEST_DIR/xpcshell-wr
+fi
+
+# Basic render testing
+export TEST_PARAMS=""
+export TEST_FLAVOUR=""
+if [ $RUN_REFTEST -ne 0 ] ; then
+  ./mach reftest $TEST_PARAMS 2>&1 | tee $TEST_DIR/reftest$TEST_FLAVOUR
+fi
+if [ $RUN_CRASHTEST -ne 0 ] ; then
+  ./mach crashtest $TEST_PARAMS 2>&1 | tee $TEST_DIR/crashtest$TEST_FLAVOUR
+fi
+if [ $RUN_MOCHITEST -ne 0 ] ; then
+  ./mach mochitest $MOCHITEST_PARAMS $TEST_PARAMS 2>&1 | tee $TEST_DIR/mochitest$TEST_FLAVOUR
+fi
+
+# WebRender testing
+export TEST_PARAMS="--enable-webrender $TEST_PARAMS"
+export TEST_FLAVOUR="-wr"
+if [ $RUN_REFTEST -ne 0 ] ; then
+./mach reftest $TEST_PARAMS 2>&1 | tee $TEST_DIR/reftest$TEST_FLAVOUR
+fi
+if [ $RUN_CRASHTEST -ne 0 ] ; then
+./mach crashtest $TEST_PARAMS 2>&1 | tee $TEST_DIR/crashtest$TEST_FLAVOUR
+fi
+if [ $RUN_MOCHITEST -ne 0 ] ; then
+./mach mochitest $MOCHITEST_PARAMS $TEST_PARAMS 2>&1 | tee $TEST_DIR/mochitest$TEST_FLAVOUR
+fi
+
+rm -f  objdir/dist/bin/certutil
+rm -f  objdir/dist/bin/pk12util
